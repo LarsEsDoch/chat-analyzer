@@ -115,6 +115,11 @@ def analyze_chat(file_path, start_filter=None, end_filter=None):
         filtered_words = [w for w in words if w not in STOP_WORDS and len(w) > 2]
         stats[s_name]['common_words'].update(filtered_words)
         stats[s_name]['total_words'] += len(words)
+
+        weekday_names = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
+        day_name = weekday_names[curr['ts'].weekday()]
+        stats[s_name]['weekdays'][day_name] += 1
+
         if 6 <= curr['hour'] < 12:
             slot = "Morgen (06-12)"
         elif 12 <= curr['hour'] < 18:
@@ -145,6 +150,7 @@ def analyze_chat(file_path, start_filter=None, end_filter=None):
     print("=" * 60)
 
     for name, s in stats.items():
+        avg_msg_length = s['total_words'] / s['msg_count'] if s['msg_count'] > 0 else 0
         avg_resp = sum(s['responses']) / len(s['responses']) if s['responses'] else 0
         avg_burst = sum(s['bursts']) / len(s['bursts']) if s['bursts'] else 1
         top_emojis = "".join([e for e, count in s['emojis'].most_common(5)])
@@ -155,12 +161,19 @@ def analyze_chat(file_path, start_filter=None, end_filter=None):
         print(f"  > Nachrichten: {s['msg_count']}")
         print(f"  > Ø Nachrichten am Stück: {avg_burst:.1f}")
         print(f"  > Ø Antwortzeit: {avg_resp:.1f} Min.")
+        print(f"  > Ø Wortanzahl: {avg_msg_length:.1f} Wörter pro Nachricht")
         print(f"  > Top Wörter:  {top_words if top_words else 'Keine'}")
         print(f"  > Top Emojis: {top_emojis if top_emojis else 'Keine'}")
         print(f"  > Zeitliche Verteilung:")
         for slot, count in sorted(s['time_slots'].items()):
             perc = (count / s['msg_count']) * 100
             print(f"    - {slot:<18}: {perc:>5.1f}% ({count} Nachrichten)")
+        print(f"  > Aktivität nach Wochentag:")
+        weekday_order = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
+        for day in weekday_order:
+            count = s['weekdays'][day]
+            perc = (count / s['msg_count']) * 100 if s['msg_count'] > 0 else 0
+            print(f"    - {day:<10}: {perc:>5.1f}% ({count})")
         print("-" * 40)
 
 
