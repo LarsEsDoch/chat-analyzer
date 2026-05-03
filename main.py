@@ -248,6 +248,67 @@ def analyze_chat(file_path, start_filter=None, end_filter=None):
         print("-" * 40)
 
 
+def analyze_emojis(file_path, start_filter=None, end_filter=None):
+    all_data = get_formatted_data(file_path)
+
+    start = start_filter if start_filter else datetime.min
+    end = end_filter if end_filter else datetime.max
+    data = [m for m in all_data if start <= m['ts'] <= end]
+
+    if not data:
+        print("Keine Daten für Emoji-Analyse gefunden.")
+        return
+
+    emoji_stats = defaultdict(lambda: {
+        'total_emojis': 0,
+        'unique_emojis': Counter(),
+        'msg_with_emoji': 0,
+        'emoji_combos': Counter()
+    })
+
+    for m in data:
+        s_name = m['sender']
+        # Extract all emojis from the message
+        found = [c for c in m['msg'] if emoji.is_emoji(c)]
+
+        if found:
+            emoji_stats[s_name]['total_emojis'] += len(found)
+            emoji_stats[s_name]['unique_emojis'].update(found)
+            emoji_stats[s_name]['msg_with_emoji'] += 1
+            # Save the combination if it contains more than one emoji.
+            if len(found) > 1:
+                combo = "".join(found[:3])
+                emoji_stats[s_name]['emoji_combos'][combo] += 1
+
+    print("=" * 60)
+    print(f"EMOJI-DIVERSITÄT & VIBE-CHECK")
+    print("=" * 60)
+
+    for name, s in emoji_stats.items():
+        msg_count = next((m_cnt['msg_count'] for n, m_cnt in defaultdict(int).items() if n == name), 1)
+        actual_msg_count = sum(1 for m in data if m['sender'] == name)
+
+        emoji_ratio = (s['total_emojis'] / actual_msg_count) if actual_msg_count > 0 else 0
+        diversity = len(s['unique_emojis'])
+
+        print(f"Name: {name}")
+        print(f"  > Emojis insgesamt:   {s['total_emojis']}")
+        print(f"  > Emoji-Dichte:       {emoji_ratio:.2f} Emojis pro Nachricht")
+        print(f"  > Emojis-Diversität:  {diversity} verschiedene Symbole genutzt")
+
+        print(f"  > Top 10 Emojis:")
+        top_10 = s['unique_emojis'].most_common(10)
+        for emo, count in top_10:
+            perc = (count / s['total_emojis'] * 100) if s['total_emojis'] > 0 else 0
+            print(f"    - {emo} : {count:>5}x ({perc:>4.1f}%)")
+
+        if s['emoji_combos']:
+            common_combos = ", ".join([f"{c}" for c, _ in s['emoji_combos'].most_common(3)])
+            print(f"  > Typische Kombis:    {common_combos}")
+
+        print("-" * 40)
+
+
 def check_occurrence(file_path, search_terms, start_filter=None, end_filter=None):
     all_data = get_formatted_data(file_path)
 
@@ -299,5 +360,6 @@ def check_occurrence(file_path, search_terms, start_filter=None, end_filter=None
 # check_occurrence('input/chat.txt', ["Hey", "Hi", "Hello"], start_filter=datetime(2024, 6, 7))
 analyze_vocabulary('input/chat.txt')
 analyze_chat('input/chat.txt')
+analyze_emojis('input/chat.txt')
 check_occurrence('input/chat.txt', ["Was machst du"])
 #check_occurrence('input/chat.txt', ["this"])
