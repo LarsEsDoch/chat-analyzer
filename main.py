@@ -3,6 +3,14 @@ from collections import Counter, defaultdict
 from datetime import datetime
 import emoji
 
+STOP_WORDS = {
+    'und', 'zu', 'dem', 'der', 'die', 'das', 'ist', 'ja', 'nein', 'ich', 'du', 'wir', 'ihr', 'sie',
+    'ein', 'eine', 'einer', 'eines', 'einem', 'einen', 'mit', 'auf', 'für', 'von', 'als', 'an',
+    'um', 'am', 'im', 'in', 'auch', 'so', 'was', 'hat', 'haben', 'hatte', 'war', 'waren', 'wie',
+    'aber', 'oder', 'doch', 'dann', 'noch', 'schon', 'mal', 'mich', 'dich', 'dir', 'mir', 'den',
+    'nicht', 'wenn', 'kann', 'bei'
+}
+
 
 def get_formatted_data(file_path):
     # Pattern for genuine messages (with colon)
@@ -86,8 +94,8 @@ def analyze_chat(file_path, start_filter=None, end_filter=None):
 
     # --- Statistics ---
     stats = defaultdict(lambda: {
-        'msg_count': 0, 'total_words': 0, 'responses': [],
-        'time_slots': Counter(), 'emojis': Counter(), 'bursts': []
+        'msg_count': 0, 'total_words': 0, 'responses': [], 'time_slots': Counter(),
+        'emojis': Counter(), 'bursts': [], 'weekdays': Counter(), 'common_words': Counter()
     })
 
     current_burst = 0
@@ -98,9 +106,15 @@ def analyze_chat(file_path, start_filter=None, end_filter=None):
         s_name = curr['sender']
         msg_text = curr['msg']
 
+        words_in_this_msg = len(re.findall(r'\b\w+\b', msg_text))
+
         stats[s_name]['msg_count'] += 1
         stats[s_name]['total_words'] += len(msg_text.split())
 
+        words = re.findall(r'\b\w+\b', msg_text.lower())
+        filtered_words = [w for w in words if w not in STOP_WORDS and len(w) > 2]
+        stats[s_name]['common_words'].update(filtered_words)
+        stats[s_name]['total_words'] += len(words)
         if 6 <= curr['hour'] < 12:
             slot = "Morgen (06-12)"
         elif 12 <= curr['hour'] < 18:
@@ -135,10 +149,13 @@ def analyze_chat(file_path, start_filter=None, end_filter=None):
         avg_burst = sum(s['bursts']) / len(s['bursts']) if s['bursts'] else 1
         top_emojis = "".join([e for e, count in s['emojis'].most_common(5)])
 
+        top_words = ", ".join([f"{w} ({c}x)" for w, c in s['common_words'].most_common(10)])
+
         print(f"Name: {name}")
         print(f"  > Nachrichten: {s['msg_count']}")
         print(f"  > Ø Nachrichten am Stück: {avg_burst:.1f}")
         print(f"  > Ø Antwortzeit: {avg_resp:.1f} Min.")
+        print(f"  > Top Wörter:  {top_words if top_words else 'Keine'}")
         print(f"  > Top Emojis: {top_emojis if top_emojis else 'Keine'}")
         print(f"  > Zeitliche Verteilung:")
         for slot, count in sorted(s['time_slots'].items()):
@@ -169,13 +186,12 @@ def check_occurrence(file_path, search_terms, start_filter=None, end_filter=None
                     found_in_msg = True
 
             if found_in_msg:
-                print(m)
                 results[s_name]['msg_with_term'] += 1
 
     # --- Output ---
     print("=" * 60)
     print(f"ANALYSE FÜR: '{', '.join(search_terms)}'")
-    print(f"Zeitraum: {data[0]["ts"].date()} bis {data[-1]['ts'].date()}")
+    print(f"Zeitraum: {data[0]['ts'].date()} bis {data[-1]['ts'].date()}")
     print("=" * 60)
 
     if not results:
