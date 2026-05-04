@@ -293,6 +293,7 @@ def analyze_chat(file_path, start_filter=None, end_filter=None):
     current_burst = 0
     last_sender = data[0]['sender']
     last_ts = data[0]['ts']
+    wait_start_ts = data[0]['ts']
 
     for i, curr in enumerate(data):
         s_name = curr['sender']
@@ -329,9 +330,14 @@ def analyze_chat(file_path, start_filter=None, end_filter=None):
             current_burst += 1
         else:
             stats[last_sender]['bursts'].append(current_burst)
-            diff = (curr['ts'] - last_ts).total_seconds() / 60
-            if diff < 720:
+            diff = (curr['ts'] - wait_start_ts).total_seconds() / 60
+            if diff < 240:
                 stats[s_name]['responses'].append(diff)
+                #print(s_name + ", " + str(diff) + ": " + msg_text)
+            else:
+                #print(s_name + ", " + str(diff) + ": " + msg_text + " (" + str(curr['ts']) + ")")
+                pass
+            wait_start_ts = curr['ts']
             current_burst = 1
             last_sender = s_name
         last_ts = curr['ts']
