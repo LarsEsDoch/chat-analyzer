@@ -2,6 +2,11 @@ import re
 from collections import Counter, defaultdict
 from datetime import datetime
 import emoji
+import spacy
+from scipy.stats import linregress
+import math
+
+nlp = spacy.load("de_core_news_sm", disable=["parser", "ner"])
 
 STOP_WORDS = {
     'und', 'zu', 'dem', 'der', 'die', 'das', 'ist', 'ja', 'nein', 'ich', 'du', 'wir', 'ihr', 'sie',
@@ -272,6 +277,72 @@ def analyze_linguistic_style(file_path, start_filter=None, end_filter=None):
         q_rate = (s['questions_asked'] / msg_count * 100) if msg_count > 0 else 0
         print(f"  > Fragen gestellt:     {s['questions_asked']} ({q_rate:.1f}% aller Nachrichten)")
         print("-" * 40)
+
+
+def advanced_vocabulary_model(file_path):
+    all_data = get_formatted_data(file_path)
+
+    # Grouping of message texts per person
+    messages_per_person = defaultdict(list)
+    for m in all_data:
+        messages_per_person[m['sender']].append(m['msg'])
+
+    # Increase the limit if a single post is very long
+    nlp.max_length = 5000000
+
+    print("=" * 60)
+    print("ERWEITERTE LINGUISTISCHE ANALYSE (LEMMATA & PROGNOSE)")
+    print("=" * 60)
+
+    for name, msgs in messages_per_person.items():
+        print(f"Verarbeite Daten für {name}...")
+
+        lemmas_all = []
+
+        # Apply nlp.pipe directly to the list of messages
+        for doc in nlp.pipe(msgs, batch_size=500, n_process=-1):  # n_process=-1 -> Use all cpu cores
+            for token in doc:
+                if token.is_alpha and not token.is_stop:
+                    lemmas_all.append(token.lemma_.lower())
+
+        total_lemmas = len(lemmas_all)
+        lemma_counts = Counter(lemmas_all)
+        unique_lemmas = len(lemma_counts)
+
+        # --- Active vocabulary (threshold >= 5) ---
+        active_vocab = [l for l, count in lemma_counts.items() if count >= 5]
+        active_count = len(active_vocab)
+
+        # --- Vocabulary retention (The last 10% of news) ---
+        recent_count = max(1, int(len(msgs) * 0.1))
+        recent_msgs = msgs[-recent_count:]
+
+        recent_lemmas = set()
+        for doc in nlp.pipe(recent_msgs, batch_size=200):
+            for token in doc:
+                if token.is_alpha:
+                    recent_lemmas.add(token.lemma_.lower())
+
+        preserved_count = len(set(lemma_counts.keys()).intersection(recent_lemmas))
+        retention_rate = (preserved_count / unique_lemmas * 100) if unique_lemmas > 0 else 0
+
+        # --- Estimated total vocabulary (Heaps' Law Approximation) ---
+        # The beta value for German is often around 0.7, the K value varies.
+        estimated_total = int(unique_lemmas * (total_lemmas ** 0.15))
+
+        print(f"Ergebnisse für {name}:")
+        print(f"  > Lemmata insgesamt (Tokens): {total_lemmas}")
+        print(f"  > Einzigartige Lemmata:       {unique_lemmas}")
+        print(f"  > Aktiver Wortschatz (f>=5): {active_count} Grundformen")
+        print(f"  > Wortschatz-Erhalt (Recent): {retention_rate:.1f}%")
+        print(f"  > Geschätzter Gesamt-Besitz:  ~{estimated_total} Wörter")
+
+        top_active = sorted([(l, c) for l, c in lemma_counts.items()],
+                            key=lambda x: x[1], reverse=True)[:5]
+        print(f"  > Top Grundformen: {', '.join([f'{l} ({c}x)' for l, c in top_active])}")
+        print("-" * 40)
+
+
 def analyze_chat(file_path, start_filter=None, end_filter=None):
     all_data = get_formatted_data(file_path)
 
