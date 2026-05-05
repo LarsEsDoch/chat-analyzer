@@ -2,10 +2,7 @@ import re
 from collections import Counter, defaultdict
 from datetime import datetime
 import emoji
-import spacy
-import torch
 import os
-import sys
 from tqdm import tqdm
 from wordlists import denglisch, youth_language, educated_language, supporting_words, self_reference_words, external_reference_words
 
@@ -251,11 +248,32 @@ def analyze_linguistic_style(file_path, start_filter=None, end_filter=None):
 
     for doc in tqdm(nlp.pipe(all_msgs_cleaned, batch_size=128), total=len(all_msgs_cleaned), desc="Analyse"):
         has_question_mark = "?" in doc.text
-        is_structural_question = len(doc) > 0 and (
-            doc[0].pos_ in ["PRON", "VERB", "AUX"] or
-            any("Int" in t.morph.get("PronType") for t in doc)
+
+        # Interrogative pronouns ONLY if they are the first substantive word.
+        has_interrogative = (
+                len(doc) > 0 and
+                any(
+                    t.morph.get("PronType") == ["Int"]
+                    for t in doc[:3]
+                )
         )
-        results.append(has_question_mark or is_structural_question)
+
+        # Aauxiliary at the beginning + direct address
+        verb_first_with_addressee = (
+                len(doc) > 0 and
+                doc[0].pos_ in ["VERB", "AUX"] and
+                any(t.text.lower() in {"du", "ihr", "sie", "dich", "dir"} for t in doc)
+        )
+
+        # German Question Day at the end ("...or?", "...or")
+        has_oder_tag = len(doc) > 0 and doc[-1].text.lower() == "oder"
+
+        results.append(
+            has_question_mark or
+            has_interrogative or
+            verb_first_with_addressee or
+            has_oder_tag
+        )
 
     # --- Language Analyzation ---
     for i, m in enumerate(data):
@@ -267,6 +285,10 @@ def analyze_linguistic_style(file_path, start_filter=None, end_filter=None):
 
         if results[i]:
             style_stats[s_name]['questions_asked'] += 1
+            #print("Question:     " + m['msg'])
+        else:
+            #print("No Question:" + " " * 60 + m['msg'])
+        pass
 
         # Word matching
         for w in words:
