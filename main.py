@@ -299,34 +299,31 @@ def analyze_linguistic_style(file_path, start_filter=None, end_filter=None):
     print("=" * 60)
 
     for name, s in style_stats.items():
-        tw = s['total_words'] if s['total_words'] > 0 else 1  # Division by Zero Schutz
+        tw = s['total_words'] if s['total_words'] > 0 else 1
         msg_count = sum(1 for m in data if m['sender'] == name)
 
-        # Wir berechnen "Vorkommen pro 10.000 Wörter", das macht seltene Dinge vergleichbar
-        rate = lambda x: (x / tw) * 10000
+        pct = lambda x: (x / tw) * 100
 
         print(f"Name: {name}")
-
-        print(f"\n  [ Sprach-Stil (Treffer pro 10.000 Wörter) ]")
-        print(f"  > Slang/Jugendsprache: {rate(s['slang_hits']):.1f}")
-        print(f"  > Denglisch:           {rate(s['denglisch_hits']):.1f}")
-        print(f"  > Gehobene Sprache:    {rate(s['educated_hits']):.1f}")
-        print(f"  > Komplexität (>9 Bst):{(s['complex_words'] / tw * 100):.1f}% aller Wörter")
+        print(f"\n  [ Sprach-Stil (Anteil am Wortschatz) ]")
+        print(f"  > Slang/Jugendsprache: {pct(s['slang_hits']):.2f}%")
+        print(f"  > Denglisch:           {pct(s['denglisch_hits']):.2f}%")
+        print(f"  > Gehobene Sprache:    {pct(s['educated_hits']):.2f}%")
+        print(f"  > Komplexe Wörter:     {(s['complex_words'] / tw * 100):.1f}%")
 
         print(f"\n  [ Beziehungs-Dynamik ]")
-        # Ego-Fokus Ratio (Ich vs Du)
         ego_ratio = s['self_hits'] / s['other_hits'] if s['other_hits'] > 0 else 0
         focus = "Selbst-Fokus" if ego_ratio > 1.2 else "Du-Fokus" if ego_ratio < 0.8 else "Ausgeglichen"
-
-        print(f"  > Ich-Bezug:           {s['self_hits']} mal ('ich', 'mein'...)")
-        print(f"  > Du-Bezug:            {s['other_hits']} mal ('du', 'dein'...)")
+        print(f"  > Ich-Bezug:           {pct(s['self_hits']):.2f}% aller Wörter")
+        print(f"  > Du-Bezug:            {pct(s['other_hits']):.2f}% aller Wörter")
         print(f"  > Fokus-Index:         {ego_ratio:.2f} ({focus})")
-        print(f"  > Support/Lob-Wörter:  {rate(s['support_hits']):.1f} (pro 10k Wörter)")
+        print(f"  > Support/Lob-Wörter:  {pct(s['support_hits']):.2f}%")
 
         print(f"\n  [ Gesprächsführung ]")
+
         q_rate = (s['questions_asked'] / msg_count * 100) if msg_count > 0 else 0
-        print(f"  > Fragen gestellt:     {s['questions_asked']} ({q_rate:.1f}% aller Nachrichten)")
-        print("-" * 40)
+        print(f"  > Fragen-Quote:        {q_rate:.1f}% aller Nachrichten")
+        print("-" * 50)
 
 
 def advanced_vocabulary_model(file_path):
