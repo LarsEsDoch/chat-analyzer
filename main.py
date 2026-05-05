@@ -459,12 +459,18 @@ def analyze_chat(file_path, start_filter=None, end_filter=None):
             last_sender = s_name
         last_ts = curr['ts']
 
+    total_messages_chat = sum(s['msg_count'] for s in stats.values())
+
     # --- Output ---
     print("=" * 60)
     print(f"Chat Analyzer ({data[0]['ts'].date()} bis {data[-1]['ts'].date()})")
     print("=" * 60)
 
     for name, s in stats.items():
+        if total_messages_chat > 0:
+            speaking_time = (s['msg_count'] / total_messages_chat) * 100
+        else:
+            speaking_time = 0
         avg_msg_length = s['total_words'] / s['msg_count'] if s['msg_count'] > 0 else 0
         avg_resp = sum(s['responses']) / len(s['responses']) if s['responses'] else 0
         avg_burst = sum(s['bursts']) / len(s['bursts']) if s['bursts'] else 1
@@ -474,6 +480,7 @@ def analyze_chat(file_path, start_filter=None, end_filter=None):
 
         print(f"Name: {name}")
         print(f"  > Nachrichten: {s['msg_count']}")
+        print(f"  > Redeanteil: {speaking_time:.1f}%")
         print(f"  > Ø Nachrichten am Stück: {avg_burst:.1f}")
         print(f"  > Ø Antwortzeit: {avg_resp:.1f} Min.")
         print(f"  > Ø Wortanzahl: {avg_msg_length:.1f} Wörter pro Nachricht")
