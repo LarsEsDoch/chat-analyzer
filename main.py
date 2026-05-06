@@ -427,7 +427,7 @@ class ChatAnalyzer:
                 if w in support_words:     style_stats[s_name]['support_hits'] += 1
                 if w in self_words:        style_stats[s_name]['self_hits'] += 1
                 if w in other_words:       style_stats[s_name]['other_hits'] += 1
-                if w in other_words:     print(s_name + ": " + m['msg'] + "     -->" + w)
+                #if w in other_words:     print(s_name + ": " + m['msg'] + "     -->" + w)
 
             # Phrase matching
             for p in slang_phrases:
@@ -575,21 +575,29 @@ class ChatAnalyzer:
 
 # --- Calls ---
 # Example:
+# chat = ChatAnalyzer('input/chat.txt')
+
+# chat.analyze_chat()
+# chat.analyze_vocabulary()
+# chat.analyze_linguistic_style()
+# chat.analyze_emojis()
+
+# check_occurrence(["Hey", "Hi", "Hello"])
+
+# chat.check_occurrence(["Good Night", "gn"], output_occurrence=True, start_filter=datetime(2024, 12, 21), end_filter=datetime(2025, 11, 5))
 # analyze_chat('input/chat.txt', start_filter=datetime(2023, 4, 23), end_filter=datetime(2025, 1, 1))
-# check_occurrence('input/chat.txt', ["Hey", "Hi", "Hello"], start_filter=datetime(2024, 6, 7))
 
 if __name__ == '__main__':
     chat = ChatAnalyzer('input/chat.txt')
 
-    #chat.analyze_chat()
-    #chat.analyze_vocabulary()
-    chat.analyze_linguistic_style(start_filter=datetime(2026, 4, 10))
+    chat.analyze_chat()
+    chat.analyze_vocabulary()
+    chat.analyze_linguistic_style()
+    chat.analyze_emojis()
 
-    #chat.analyze_emojis()
-    #chat.check_occurrence(["Nachti", "Gute Nacht", "Gut Nacht"], output_occurrence=True)
-    #chat.check_occurrence(["Jaa"])
+    chat.check_occurrence(["Nachti", "Gute Nacht", "Gut Nacht"], output_occurrence=True)
 
-    # chat.analyze_chat(start_filter=datetime(2026, 2, 10), end_filter=datetime(2026, 3, 10))
+    chat.analyze_chat(start_filter=datetime(2026, 1, 1), end_filter=datetime(2026, 5, 2))
 
 #TODO Add image voice message analyzer (how often)
 # veränderung der werte in monats schritten
