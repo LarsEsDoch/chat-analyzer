@@ -5,22 +5,8 @@ import emoji
 import os
 from tqdm import tqdm
 from wordlists import denglisch, youth_language, educated_language, supporting_words, self_reference_words, external_reference_words
-
-msvc_bin_dir = r"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64"
-
-if msvc_bin_dir not in os.environ["PATH"]:
-    os.environ["PATH"] = msvc_bin_dir + os.pathsep + os.environ["PATH"]
-
 import spacy
 import torch
-
-print(f"CUDA verfügbar: {torch.cuda.is_available()}")
-print(f"Grafikkarte: {torch.cuda.get_device_name(0)}")
-
-if spacy.prefer_gpu():
-    print("GPU-Beschleunigung aktiv!")
-
-nlp = spacy.load("de_dep_news_trf")
 
 STOP_WORDS = {
     'und', 'zu', 'dem', 'der', 'die', 'das', 'ist', 'ja', 'nein', 'ich', 'du', 'wir', 'ihr', 'sie',
@@ -111,445 +97,446 @@ def _split_list(lst):
     return words, phrases
 
 
-def analyze_vocabulary(file_path, start_filter=None, end_filter=None):
-    all_data = get_formatted_data(file_path)
+class ChatAnalyzer:
+    def __init__(self, file_path):
+        self.file_path = file_path
+        self.data = get_formatted_data(file_path)
+        self._nlp = None
 
-    start = start_filter if start_filter else datetime.min
-    end = end_filter if end_filter else datetime.max
-    data = [m for m in all_data if start <= m['ts'] <= end]
+    def _get_nlp(self):
+        if self._nlp is None:
+            msvc_bin_dir = r"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64"
 
-    if not data:
-        print("Keine Nachrichten für die Wortschatz-Analyse gefunden.")
-        return
+            if msvc_bin_dir not in os.environ["PATH"]:
+                os.environ["PATH"] = msvc_bin_dir + os.pathsep + os.environ["PATH"]
+            print(f"CUDA verfügbar: {torch.cuda.is_available()}")
+            print(f"Grafikkarte: {torch.cuda.get_device_name(0)}")
+            if spacy.prefer_gpu():
+                print("GPU-Beschleunigung aktiv!")
+            self._nlp = spacy.load("de_dep_news_trf")
+            self._nlp.max_length = 5_000_000
+        return self._nlp
 
-    flood_pattern    = re.compile(r'(.)\1{2,}')
-    syllable_pattern = re.compile(r'(\w{2,3})\1{2,}')
+    def _filter(self, start_filter=None, end_filter=None):
+        start = start_filter if start_filter else datetime.min
+        end = end_filter if end_filter else datetime.max
+        return [m for m in self.data if start <= m['ts'] <= end]
 
-    vocab_stats = defaultdict(lambda: {
-        # Token level (without spaCy)
-        'all_words':     [],
-        'unique_words':  set(),
-        'word_lengths':  Counter(),
-        # Lemma level (spaCy)
-        'lemma_counts':  Counter(),
-        'recent_lemmas': set(),
-    })
+    def analyze_chat(self, start_filter=None, end_filter=None):
+        data = self._filter(start_filter, end_filter)
+        if not data:
+            print("Keine Nachrichten im Zeitraum gefunden.")
+            return
 
-    msgs_per_sender = defaultdict(list)
-    for m in data:
-        msgs_per_sender[m['sender']].append(m['msg'])
+        # --- Statistics ---
+        stats = defaultdict(lambda: {
+            'msg_count': 0, 'total_words': 0, 'responses': [], 'time_slots': Counter(),
+            'emojis': Counter(), 'bursts': [], 'weekdays': Counter(), 'common_words': Counter()
+        })
 
-    # --- Token stats (no spaCy needed) ---
-    for m in data:
-        s_name = m['sender']
-        words = re.findall(r'\b[a-zA-ZäöüÄÖÜß]+\b', m['msg'].lower())
-        for w in words:
-            if not flood_pattern.search(w) and not syllable_pattern.search(w) and len(w) < 100:
-                vocab_stats[s_name]['all_words'].append(w)
-                vocab_stats[s_name]['unique_words'].add(w)
-                vocab_stats[s_name]['word_lengths'][len(w)] += 1
+        current_burst = 0
+        last_sender = data[0]['sender']
+        last_ts = data[0]['ts']
+        wait_start_ts = data[0]['ts']
 
-    # --- Lemma stats (one spaCy run per sender) ---
-    nlp.max_length = 5_000_000
-    for s_name, msgs in msgs_per_sender.items():
-        recent_msgs = msgs[max(0, int(len(msgs) * 0.9)):]
+        for i, curr in enumerate(data):
+            s_name = curr['sender']
+            msg_text = curr['msg']
 
-        msgs_cleaned = [m[:1000] for m in msgs]
-        recent_msgs_cleaned = [m[:1000] for m in recent_msgs]
+            words_in_this_msg = len(re.findall(r'\b\w+\b', msg_text))
 
-        for doc in tqdm(nlp.pipe(msgs_cleaned, batch_size=256), total=len(msgs_cleaned), desc=f"Lemmata {s_name}"):
-            for token in doc:
-                if token.is_alpha and not token.is_stop:
-                    vocab_stats[s_name]['lemma_counts'][token.lemma_.lower()] += 1
+            stats[s_name]['msg_count'] += 1
+            stats[s_name]['total_words'] += len(msg_text.split())
 
-        for doc in nlp.pipe(recent_msgs_cleaned, batch_size=128):
-            for token in doc:
-                if token.is_alpha:
-                    vocab_stats[s_name]['recent_lemmas'].add(token.lemma_.lower())
+            words = re.findall(r'\b\w+\b', msg_text.lower())
+            filtered_words = [w for w in words if w not in STOP_WORDS and len(w) > 2]
+            stats[s_name]['common_words'].update(filtered_words)
 
-    # --- Output per person ---
-    print("=" * 60)
-    print("WORTSCHATZ-ANALYSE")
-    print("=" * 60)
+            weekday_names = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
+            day_name = weekday_names[curr['ts'].weekday()]
+            stats[s_name]['weekdays'][day_name] += 1
 
-    for name, s in vocab_stats.items():
-        total_tokens  = len(s['all_words'])
-        unique_tokens = len(s['unique_words'])
-        ttr           = (unique_tokens / total_tokens * 100) if total_tokens > 0 else 0
-        avg_len       = sum(k * v for k, v in s['word_lengths'].items()) / total_tokens if total_tokens > 0 else 0
-
-        lemma_counts  = s['lemma_counts']
-        unique_lemmas = len(lemma_counts)
-        total_lemmas  = sum(lemma_counts.values())
-        active_vocab  = [l for l, c in lemma_counts.items() if c >= 5]
-        retention     = (len(set(lemma_counts) & s['recent_lemmas']) / unique_lemmas * 100) if unique_lemmas > 0 else 0
-
-        # Heaps' Law: V = K * N^β  (K≈44, β≈0.67 for German)
-        estimated_total = int(44 * (total_lemmas ** 0.67)) if total_lemmas > 0 else 0
-
-        longest = sorted(s['unique_words'], key=len, reverse=True)[:5]
-        top_lemmas = lemma_counts.most_common(5)
-
-        print(f"Name: {name}")
-
-        print(f"\n  [ Token-Ebene ]")
-        print(f"  > Wörter gesamt:         {total_tokens}")
-        print(f"  > Einzigartige Wörter:   {unique_tokens}")
-        print(f"  > Wortschatz-Vielfalt:   {ttr:.2f}% TTR")
-        print(f"  > Ø Buchstaben/Wort:     {avg_len:.2f}")
-        print(f"  > Längste Wörter:        {', '.join(longest)}")
-        print(f"  > Wortlängen-Profil:")
-        for length in range(1, 11):
-            count = s['word_lengths'][length]
-            perc  = (count / total_tokens * 100) if total_tokens > 0 else 0
-            bar   = "█" * int(perc / 2)
-            print(f"    {length:>2} Bst.: {perc:>5.1f}% {bar}")
-
-        print(f"\n  [ Lemma-Ebene (spaCy) ]")
-        print(f"  > Einzigartige Grundformen:  {unique_lemmas}")
-        print(f"  > Aktiver Wortschatz (≥5x):  {len(active_vocab)}")
-        print(f"  > Wortschatz-Erhalt (10%):   {retention:.1f}%")
-        print(f"  > Geschätzter Gesamtbesitz:  ~{estimated_total} Wörter")
-        print(f"  > Top Grundformen:           {', '.join(f'{l} ({c}x)' for l, c in top_lemmas)}")
-        print("-" * 40)
-
-    # --- Overlap analysis (only for 2 people) ---
-    senders = list(vocab_stats.keys())
-    if len(senders) >= 2:
-        u1, u2   = senders[0], senders[1]
-        set1     = vocab_stats[u1]['unique_words']
-        set2     = vocab_stats[u2]['unique_words']
-        common   = set1 & set2
-        jaccard  = len(common) / len(set1 | set2) * 100 if set1 | set2 else 0
-
-        cnt1 = Counter(vocab_stats[u1]['all_words'])
-        cnt2 = Counter(vocab_stats[u2]['all_words'])
-        core = [w for w in common if cnt1[w] >= 5 and cnt2[w] >= 5 and w not in STOP_WORDS]
-
-        print("=" * 60)
-        print("WORTSCHATZ-ÜBERSCHNEIDUNG")
-        print("=" * 60)
-        print(f"  > Gemeinsame Wörter:    {len(common)}")
-        print(f"  > Ähnlichkeits-Index:   {jaccard:.2f}% (Jaccard)")
-        print(f"  > Kern-Wortschatz:      {len(core)} Wörter (beide ≥5x)")
-        print(f"  > Beispiele:            {', '.join(sorted(core, key=len, reverse=True)[:10])}")
-
-
-def analyze_linguistic_style(file_path, start_filter=None, end_filter=None):
-    all_data = get_formatted_data(file_path)
-
-    start = start_filter if start_filter else datetime.min
-    end = end_filter if end_filter else datetime.max
-    data = [m for m in all_data if start <= m['ts'] <= end]
-
-    if not data:
-        return
-
-    # --- Prepare word_lists ---
-    slang_words,     slang_phrases     = _split_list(youth_language)
-    denglisch_words, denglisch_phrases = _split_list(denglisch)
-    educated_words,  educated_phrases  = _split_list(educated_language)
-    support_words,   support_phrases   = _split_list(supporting_words)
-    self_words,      self_phrases      = _split_list(self_reference_words)
-    other_words,     other_phrases     = _split_list(external_reference_words)
-
-    style_stats = defaultdict(lambda: {
-        'total_words': 0,
-        'complex_words': 0,
-        'slang_hits': 0,
-        'denglisch_hits': 0,
-        'educated_hits': 0,
-        'support_hits': 0,
-        'self_hits': 0,
-        'other_hits': 0,
-        'questions_asked': 0
-    })
-
-    # --- spaCy: Question recognition ---
-    all_msgs_cleaned = [m['msg'][:1000] for m in data]
-    results = []
-
-    for doc in tqdm(nlp.pipe(all_msgs_cleaned, batch_size=128), total=len(all_msgs_cleaned), desc="Analyse"):
-        has_question_mark = "?" in doc.text
-
-        # Interrogative pronouns ONLY if they are the first substantive word.
-        has_interrogative = (
-                len(doc) > 0 and
-                any(
-                    t.morph.get("PronType") == ["Int"]
-                    for t in doc[:3]
-                )
-        )
-
-        # Aauxiliary at the beginning + direct address
-        verb_first_with_addressee = (
-                len(doc) > 0 and
-                doc[0].pos_ in ["VERB", "AUX"] and
-                any(t.text.lower() in {"du", "ihr", "sie", "dich", "dir"} for t in doc)
-        )
-
-        # German Question Day at the end ("...or?", "...or")
-        has_oder_tag = len(doc) > 0 and doc[-1].text.lower() == "oder"
-
-        results.append(
-            has_question_mark or
-            has_interrogative or
-            verb_first_with_addressee or
-            has_oder_tag
-        )
-
-    # --- Language Analyzation ---
-    for i, m in enumerate(data):
-        s_name = m['sender']
-        msg_text = m['msg'].lower()
-        words = re.findall(r'\b[a-zäöüß]+\b', msg_text)
-
-        style_stats[s_name]['total_words'] += len(words)
-
-        if results[i]:
-            style_stats[s_name]['questions_asked'] += 1
-            #print("Question:     " + m['msg'])
-        else:
-            #print("No Question:" + " " * 60 + m['msg'])
-            pass
-
-        # Word matching
-        for w in words:
-            if len(w) >= 10:           style_stats[s_name]['complex_words'] += 1
-            if w in slang_words:       style_stats[s_name]['slang_hits'] += 1
-            if w in denglisch_words:   style_stats[s_name]['denglisch_hits'] += 1
-            if w in educated_words:    style_stats[s_name]['educated_hits'] += 1
-            if w in support_words:     style_stats[s_name]['support_hits'] += 1
-            if w in self_words:        style_stats[s_name]['self_hits'] += 1
-            if w in other_words:       style_stats[s_name]['other_hits'] += 1
-
-        # Phrase matching
-        for p in slang_phrases:
-            if p in msg_text: style_stats[s_name]['slang_hits'] += 1
-        for p in denglisch_phrases:
-            if p in msg_text: style_stats[s_name]['denglisch_hits'] += 1
-        for p in educated_phrases:
-            if p in msg_text: style_stats[s_name]['educated_hits'] += 1
-        for p in support_phrases:
-            if p in msg_text: style_stats[s_name]['support_hits'] += 1
-        for p in self_phrases:
-            if p in msg_text: style_stats[s_name]['self_hits'] += 1
-        for p in other_phrases:
-            if p in msg_text: style_stats[s_name]['other_hits'] += 1
-
-    # --- Output ---
-    print("=" * 60)
-    print("LINGUISTISCHES & PSYCHOLOGISCHES PROFIL")
-    print("=" * 60)
-
-    for name, s in style_stats.items():
-        tw = s['total_words'] if s['total_words'] > 0 else 1
-        msg_count = sum(1 for m in data if m['sender'] == name)
-
-        pct = lambda x: (x / tw) * 100
-
-        print(f"Name: {name}")
-        print(f"\n  [ Sprach-Stil (Anteil am Wortschatz) ]")
-        print(f"  > Slang/Jugendsprache: {pct(s['slang_hits']):.2f}%")
-        print(f"  > Denglisch:           {pct(s['denglisch_hits']):.2f}%")
-        print(f"  > Gehobene Sprache:    {pct(s['educated_hits']):.2f}%")
-        print(f"  > Komplexe Wörter:     {(s['complex_words'] / tw * 100):.1f}%")
-
-        print(f"\n  [ Beziehungs-Dynamik ]")
-        ego_ratio = s['self_hits'] / s['other_hits'] if s['other_hits'] > 0 else 0
-        focus = "Selbst-Fokus" if ego_ratio > 1.2 else "Du-Fokus" if ego_ratio < 0.8 else "Ausgeglichen"
-        print(f"  > Ich-Bezug:           {pct(s['self_hits']):.2f}% aller Wörter")
-        print(f"  > Du-Bezug:            {pct(s['other_hits']):.2f}% aller Wörter")
-        print(f"  > Fokus-Index:         {ego_ratio:.2f} ({focus})")
-        print(f"  > Support/Lob-Wörter:  {pct(s['support_hits']):.2f}%")
-
-        print(f"\n  [ Gesprächsführung ]")
-
-        q_rate = (s['questions_asked'] / msg_count * 100) if msg_count > 0 else 0
-        print(f"  > Fragen-Quote:        {q_rate:.1f}% aller Nachrichten")
-        print("-" * 50)
-
-
-def analyze_chat(file_path, start_filter=None, end_filter=None):
-    all_data = get_formatted_data(file_path)
-
-    # Filtering
-    start = start_filter if start_filter else datetime.min
-    end = end_filter if end_filter else datetime.max
-    data = [m for m in all_data if start <= m['ts'] <= end]
-
-    if not data:
-        print("Keine Nachrichten im Zeitraum gefunden.")
-        return
-
-    # --- Statistics ---
-    stats = defaultdict(lambda: {
-        'msg_count': 0, 'total_words': 0, 'responses': [], 'time_slots': Counter(),
-        'emojis': Counter(), 'bursts': [], 'weekdays': Counter(), 'common_words': Counter()
-    })
-
-    current_burst = 0
-    last_sender = data[0]['sender']
-    last_ts = data[0]['ts']
-    wait_start_ts = data[0]['ts']
-
-    for i, curr in enumerate(data):
-        s_name = curr['sender']
-        msg_text = curr['msg']
-
-        words_in_this_msg = len(re.findall(r'\b\w+\b', msg_text))
-
-        stats[s_name]['msg_count'] += 1
-        stats[s_name]['total_words'] += len(msg_text.split())
-
-        words = re.findall(r'\b\w+\b', msg_text.lower())
-        filtered_words = [w for w in words if w not in STOP_WORDS and len(w) > 2]
-        stats[s_name]['common_words'].update(filtered_words)
-
-        weekday_names = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
-        day_name = weekday_names[curr['ts'].weekday()]
-        stats[s_name]['weekdays'][day_name] += 1
-
-        if 6 <= curr['hour'] < 12:
-            slot = "Morgen (06-12)"
-        elif 12 <= curr['hour'] < 18:
-            slot = "Mittag/Nachm. (12-18)"
-        elif 18 <= curr['hour'] < 23:
-            slot = "Abend (18-23)"
-        else:
-            slot = "Nacht (23-06)"
-        stats[s_name]['time_slots'][slot] += 1
-
-        found_emojis = [e['emoji'] for e in emoji.emoji_list(msg_text)]
-        stats[s_name]['emojis'].update(found_emojis)
-
-        if s_name == last_sender:
-            current_burst += 1
-        else:
-            stats[last_sender]['bursts'].append(current_burst)
-            diff = (curr['ts'] - wait_start_ts).total_seconds() / 60
-            if 1 < diff < 240 :
-                stats[s_name]['responses'].append(diff)
-                #print(s_name + ", " + str(diff) + ": " + msg_text)
+            if 6 <= curr['hour'] < 12:
+                slot = "Morgen (06-12)"
+            elif 12 <= curr['hour'] < 18:
+                slot = "Mittag/Nachm. (12-18)"
+            elif 18 <= curr['hour'] < 23:
+                slot = "Abend (18-23)"
             else:
-                #print(s_name + ", " + str(diff) + ": " + msg_text + " (" + str(curr['ts']) + ")")
+                slot = "Nacht (23-06)"
+            stats[s_name]['time_slots'][slot] += 1
+
+            found_emojis = [e['emoji'] for e in emoji.emoji_list(msg_text)]
+            stats[s_name]['emojis'].update(found_emojis)
+
+            if s_name == last_sender:
+                current_burst += 1
+            else:
+                stats[last_sender]['bursts'].append(current_burst)
+                diff = (curr['ts'] - wait_start_ts).total_seconds() / 60
+                if 1 < diff < 240:
+                    stats[s_name]['responses'].append(diff)
+                    # print(s_name + ", " + str(diff) + ": " + msg_text)
+                else:
+                    # print(s_name + ", " + str(diff) + ": " + msg_text + " (" + str(curr['ts']) + ")")
+                    pass
+                wait_start_ts = curr['ts']
+                current_burst = 1
+                last_sender = s_name
+            last_ts = curr['ts']
+
+        total_messages_chat = sum(s['msg_count'] for s in stats.values())
+
+        # --- Output ---
+        print("=" * 60)
+        print(f"Chat Analyzer ({data[0]['ts'].date()} bis {data[-1]['ts'].date()})")
+        print("=" * 60)
+
+        for name, s in stats.items():
+            if total_messages_chat > 0:
+                speaking_time = (s['msg_count'] / total_messages_chat) * 100
+            else:
+                speaking_time = 0
+            avg_msg_length = s['total_words'] / s['msg_count'] if s['msg_count'] > 0 else 0
+            avg_resp = sum(s['responses']) / len(s['responses']) if s['responses'] else 0
+            avg_burst = sum(s['bursts']) / len(s['bursts']) if s['bursts'] else 1
+            top_emojis = "".join([e for e, count in s['emojis'].most_common(5)])
+
+            top_words = ", ".join([f"{w} ({c}x)" for w, c in s['common_words'].most_common(10)])
+
+            print(f"Name: {name}")
+            print(f"  > Nachrichten: {s['msg_count']}")
+            print(f"  > Redeanteil: {speaking_time:.1f}%")
+            print(f"  > Ø Nachrichten am Stück: {avg_burst:.1f}")
+            print(f"  > Ø Antwortzeit: {avg_resp:.1f} Min.")
+            print(f"  > Ø Wortanzahl: {avg_msg_length:.1f} Wörter pro Nachricht")
+            print(f"  > Top Wörter:  {top_words if top_words else 'Keine'}")
+            print(f"  > Top Emojis: {top_emojis if top_emojis else 'Keine'}")
+            print(f"  > Zeitliche Verteilung:")
+            for slot, count in sorted(s['time_slots'].items()):
+                perc = (count / s['msg_count']) * 100
+                print(f"    - {slot:<18}: {perc:>5.1f}% ({count} Nachrichten)")
+            print(f"  > Aktivität nach Wochentag:")
+            weekday_order = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
+            for day in weekday_order:
+                count = s['weekdays'][day]
+                perc = (count / s['msg_count']) * 100 if s['msg_count'] > 0 else 0
+                print(f"    - {day:<10}: {perc:>5.1f}% ({count})")
+            print("-" * 40)
+
+    def analyze_vocabulary(self, start_filter=None, end_filter=None):
+        data = self._filter(start_filter, end_filter)
+        nlp = self._get_nlp()
+        if not data:
+            print("Keine Nachrichten für die Wortschatz-Analyse gefunden.")
+            return
+
+        flood_pattern = re.compile(r'(.)\1{2,}')
+        syllable_pattern = re.compile(r'(\w{2,3})\1{2,}')
+
+        vocab_stats = defaultdict(lambda: {
+            # Token level (without spaCy)
+            'all_words': [],
+            'unique_words': set(),
+            'word_lengths': Counter(),
+            # Lemma level (spaCy)
+            'lemma_counts': Counter(),
+            'recent_lemmas': set(),
+        })
+
+        msgs_per_sender = defaultdict(list)
+        for m in data:
+            msgs_per_sender[m['sender']].append(m['msg'])
+
+        # --- Token stats (no spaCy needed) ---
+        for m in data:
+            s_name = m['sender']
+            words = re.findall(r'\b[a-zA-ZäöüÄÖÜß]+\b', m['msg'].lower())
+            for w in words:
+                if not flood_pattern.search(w) and not syllable_pattern.search(w) and len(w) < 100:
+                    vocab_stats[s_name]['all_words'].append(w)
+                    vocab_stats[s_name]['unique_words'].add(w)
+                    vocab_stats[s_name]['word_lengths'][len(w)] += 1
+
+        # --- Lemma stats (one spaCy run per sender) ---
+        nlp.max_length = 5_000_000
+        for s_name, msgs in msgs_per_sender.items():
+            recent_msgs = msgs[max(0, int(len(msgs) * 0.9)):]
+
+            msgs_cleaned = [m[:1000] for m in msgs]
+            recent_msgs_cleaned = [m[:1000] for m in recent_msgs]
+
+            for doc in tqdm(nlp.pipe(msgs_cleaned, batch_size=256), total=len(msgs_cleaned), desc=f"Lemmata {s_name}"):
+                for token in doc:
+                    if token.is_alpha and not token.is_stop:
+                        vocab_stats[s_name]['lemma_counts'][token.lemma_.lower()] += 1
+
+            for doc in nlp.pipe(recent_msgs_cleaned, batch_size=128):
+                for token in doc:
+                    if token.is_alpha:
+                        vocab_stats[s_name]['recent_lemmas'].add(token.lemma_.lower())
+
+        # --- Output per person ---
+        print("=" * 60)
+        print("WORTSCHATZ-ANALYSE")
+        print("=" * 60)
+
+        for name, s in vocab_stats.items():
+            total_tokens = len(s['all_words'])
+            unique_tokens = len(s['unique_words'])
+            ttr = (unique_tokens / total_tokens * 100) if total_tokens > 0 else 0
+            avg_len = sum(k * v for k, v in s['word_lengths'].items()) / total_tokens if total_tokens > 0 else 0
+
+            lemma_counts = s['lemma_counts']
+            unique_lemmas = len(lemma_counts)
+            total_lemmas = sum(lemma_counts.values())
+            active_vocab = [l for l, c in lemma_counts.items() if c >= 5]
+            retention = (len(set(lemma_counts) & s['recent_lemmas']) / unique_lemmas * 100) if unique_lemmas > 0 else 0
+
+            # Heaps' Law: V = K * N^β  (K≈44, β≈0.67 for German)
+            estimated_total = int(44 * (total_lemmas ** 0.67)) if total_lemmas > 0 else 0
+
+            longest = sorted(s['unique_words'], key=len, reverse=True)[:5]
+            top_lemmas = lemma_counts.most_common(5)
+
+            print(f"Name: {name}")
+
+            print(f"\n  [ Token-Ebene ]")
+            print(f"  > Wörter gesamt:         {total_tokens}")
+            print(f"  > Einzigartige Wörter:   {unique_tokens}")
+            print(f"  > Wortschatz-Vielfalt:   {ttr:.2f}% TTR")
+            print(f"  > Ø Buchstaben/Wort:     {avg_len:.2f}")
+            print(f"  > Längste Wörter:        {', '.join(longest)}")
+            print(f"  > Wortlängen-Profil:")
+            for length in range(1, 11):
+                count = s['word_lengths'][length]
+                perc = (count / total_tokens * 100) if total_tokens > 0 else 0
+                bar = "█" * int(perc / 2)
+                print(f"    {length:>2} Bst.: {perc:>5.1f}% {bar}")
+
+            print(f"\n  [ Lemma-Ebene (spaCy) ]")
+            print(f"  > Einzigartige Grundformen:  {unique_lemmas}")
+            print(f"  > Aktiver Wortschatz (≥5x):  {len(active_vocab)}")
+            print(f"  > Wortschatz-Erhalt (10%):   {retention:.1f}%")
+            print(f"  > Geschätzter Gesamtbesitz:  ~{estimated_total} Wörter")
+            print(f"  > Top Grundformen:           {', '.join(f'{l} ({c}x)' for l, c in top_lemmas)}")
+            print("-" * 40)
+
+        # --- Overlap analysis (only for 2 people) ---
+        senders = list(vocab_stats.keys())
+        if len(senders) >= 2:
+            u1, u2 = senders[0], senders[1]
+            set1 = vocab_stats[u1]['unique_words']
+            set2 = vocab_stats[u2]['unique_words']
+            common = set1 & set2
+            jaccard = len(common) / len(set1 | set2) * 100 if set1 | set2 else 0
+
+            cnt1 = Counter(vocab_stats[u1]['all_words'])
+            cnt2 = Counter(vocab_stats[u2]['all_words'])
+            core = [w for w in common if cnt1[w] >= 5 and cnt2[w] >= 5 and w not in STOP_WORDS]
+
+            print("=" * 60)
+            print("WORTSCHATZ-ÜBERSCHNEIDUNG")
+            print("=" * 60)
+            print(f"  > Gemeinsame Wörter:    {len(common)}")
+            print(f"  > Ähnlichkeits-Index:   {jaccard:.2f}% (Jaccard)")
+            print(f"  > Kern-Wortschatz:      {len(core)} Wörter (beide ≥5x)")
+            print(f"  > Beispiele:            {', '.join(sorted(core, key=len, reverse=True)[:10])}")
+
+    def analyze_linguistic_style(self, start_filter=None, end_filter=None):
+        data = self._filter(start_filter, end_filter)
+        nlp = self._get_nlp()
+        if not data:
+            print("Keine Nachrichten für die  linguistische Analyse gefunden.")
+            return
+
+        # --- Prepare word_lists ---
+        slang_words, slang_phrases = _split_list(youth_language)
+        denglisch_words, denglisch_phrases = _split_list(denglisch)
+        educated_words, educated_phrases = _split_list(educated_language)
+        support_words, support_phrases = _split_list(supporting_language)
+        self_words, self_phrases = _split_list(selfish_language)
+        other_words, other_phrases = _split_list(other_language)
+
+        style_stats = defaultdict(lambda: {
+            'total_words': 0,
+            'complex_words': 0,
+            'slang_hits': 0,
+            'denglisch_hits': 0,
+            'educated_hits': 0,
+            'support_hits': 0,
+            'self_hits': 0,
+            'other_hits': 0,
+            'questions_asked': 0
+        })
+
+        # --- spaCy: Question recognition ---
+        all_msgs_cleaned = [m['msg'][:1000] for m in data]
+        results = []
+
+        for doc in tqdm(nlp.pipe(all_msgs_cleaned, batch_size=128), total=len(all_msgs_cleaned), desc="Analyse"):
+            has_question_mark = "?" in doc.text
+
+            # Interrogative pronouns ONLY if they are the first substantive word.
+            has_interrogative = (
+                    len(doc) > 0 and
+                    any(
+                        t.morph.get("PronType") == ["Int"]
+                        for t in doc[:3]
+                    )
+            )
+
+            # Aauxiliary at the beginning + direct address
+            verb_first_with_addressee = (
+                    len(doc) > 0 and
+                    doc[0].pos_ in ["VERB", "AUX"] and
+                    any(t.text.lower() in {"du", "ihr", "sie", "dich", "dir"} for t in doc)
+            )
+
+            # German Question Day at the end ("...or?", "...or")
+            has_oder_tag = len(doc) > 0 and doc[-1].text.lower() == "oder"
+
+            results.append(
+                has_question_mark or
+                has_interrogative or
+                verb_first_with_addressee or
+                has_oder_tag
+            )
+
+        # --- Language Analyzation ---
+        for i, m in enumerate(data):
+            s_name = m['sender']
+            msg_text = m['msg'].lower()
+            words = re.findall(r'\b[a-zäöüß]+\b', msg_text)
+
+            style_stats[s_name]['total_words'] += len(words)
+
+            if results[i]:
+                style_stats[s_name]['questions_asked'] += 1
+                # print("Question:     " + m['msg'])
+            else:
+                # print("No Question:" + " " * 60 + m['msg'])
                 pass
-            wait_start_ts = curr['ts']
-            current_burst = 1
-            last_sender = s_name
-        last_ts = curr['ts']
 
-    total_messages_chat = sum(s['msg_count'] for s in stats.values())
+            # Word matching
+            for w in words:
+                if len(w) >= 10:           style_stats[s_name]['complex_words'] += 1
+                if w in slang_words:       style_stats[s_name]['slang_hits'] += 1
+                if w in denglisch_words:   style_stats[s_name]['denglisch_hits'] += 1
+                if w in educated_words:    style_stats[s_name]['educated_hits'] += 1
+                if w in support_words:     style_stats[s_name]['support_hits'] += 1
+                if w in self_words:        style_stats[s_name]['self_hits'] += 1
+                if w in other_words:       style_stats[s_name]['other_hits'] += 1
+                if w in other_words:     print(s_name + ": " + m['msg'] + "     -->" + w)
 
-    # --- Output ---
-    print("=" * 60)
-    print(f"Chat Analyzer ({data[0]['ts'].date()} bis {data[-1]['ts'].date()})")
-    print("=" * 60)
+            # Phrase matching
+            for p in slang_phrases:
+                if p in msg_text: style_stats[s_name]['slang_hits'] += 1
+            for p in denglisch_phrases:
+                if p in msg_text: style_stats[s_name]['denglisch_hits'] += 1
+            for p in educated_phrases:
+                if p in msg_text: style_stats[s_name]['educated_hits'] += 1
+            for p in support_phrases:
+                if p in msg_text: style_stats[s_name]['support_hits'] += 1
+            for p in self_phrases:
+                if p in msg_text: style_stats[s_name]['self_hits'] += 1
+            for p in other_phrases:
+                if p in msg_text: style_stats[s_name]['other_hits'] += 1
 
-    for name, s in stats.items():
-        if total_messages_chat > 0:
-            speaking_time = (s['msg_count'] / total_messages_chat) * 100
-        else:
-            speaking_time = 0
-        avg_msg_length = s['total_words'] / s['msg_count'] if s['msg_count'] > 0 else 0
-        avg_resp = sum(s['responses']) / len(s['responses']) if s['responses'] else 0
-        avg_burst = sum(s['bursts']) / len(s['bursts']) if s['bursts'] else 1
-        top_emojis = "".join([e for e, count in s['emojis'].most_common(5)])
+        # --- Output ---
+        print("=" * 60)
+        print("LINGUISTISCHES & PSYCHOLOGISCHES PROFIL")
+        print("=" * 60)
 
-        top_words = ", ".join([f"{w} ({c}x)" for w, c in s['common_words'].most_common(10)])
+        for name, s in style_stats.items():
+            tw = s['total_words'] if s['total_words'] > 0 else 1
+            msg_count = sum(1 for m in data if m['sender'] == name)
 
-        print(f"Name: {name}")
-        print(f"  > Nachrichten: {s['msg_count']}")
-        print(f"  > Redeanteil: {speaking_time:.1f}%")
-        print(f"  > Ø Nachrichten am Stück: {avg_burst:.1f}")
-        print(f"  > Ø Antwortzeit: {avg_resp:.1f} Min.")
-        print(f"  > Ø Wortanzahl: {avg_msg_length:.1f} Wörter pro Nachricht")
-        print(f"  > Top Wörter:  {top_words if top_words else 'Keine'}")
-        print(f"  > Top Emojis: {top_emojis if top_emojis else 'Keine'}")
-        print(f"  > Zeitliche Verteilung:")
-        for slot, count in sorted(s['time_slots'].items()):
-            perc = (count / s['msg_count']) * 100
-            print(f"    - {slot:<18}: {perc:>5.1f}% ({count} Nachrichten)")
-        print(f"  > Aktivität nach Wochentag:")
-        weekday_order = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
-        for day in weekday_order:
-            count = s['weekdays'][day]
-            perc = (count / s['msg_count']) * 100 if s['msg_count'] > 0 else 0
-            print(f"    - {day:<10}: {perc:>5.1f}% ({count})")
-        print("-" * 40)
+            pct = lambda x: (x / tw) * 100
 
+            print(f"Name: {name}")
+            print(f"\n  [ Sprach-Stil (Anteil am Wortschatz) ]")
+            print(f"  > Slang/Jugendsprache: {pct(s['slang_hits']):.2f}%")
+            print(f"  > Denglisch:           {pct(s['denglisch_hits']):.2f}%")
+            print(f"  > Gehobene Sprache:    {pct(s['educated_hits']):.2f}%")
+            print(f"  > Komplexe Wörter:     {(s['complex_words'] / tw * 100):.1f}%")
 
-def analyze_emojis(file_path, start_filter=None, end_filter=None):
-    all_data = get_formatted_data(file_path)
+            print(f"\n  [ Beziehungs-Dynamik ]")
+            ego_ratio = s['self_hits'] / s['other_hits'] if s['other_hits'] > 0 else 0
+            focus = "Selbst-Fokus" if ego_ratio > 1.2 else "Du-Fokus" if ego_ratio < 0.8 else "Ausgeglichen"
+            print(f"  > Ich-Bezug:           {pct(s['self_hits']):.2f}% aller Wörter")
+            print(f"  > Du-Bezug:            {pct(s['other_hits']):.2f}% aller Wörter")
+            print(f"  > Fokus-Index:         {ego_ratio:.2f} ({focus})")
+            print(f"  > Support/Lob-Wörter:  {pct(s['support_hits']):.2f}%")
 
-    start = start_filter if start_filter else datetime.min
-    end = end_filter if end_filter else datetime.max
-    data = [m for m in all_data if start <= m['ts'] <= end]
+            print(f"\n  [ Gesprächsführung ]")
 
-    if not data:
-        print("Keine Daten für Emoji-Analyse gefunden.")
-        return
+            q_rate = (s['questions_asked'] / msg_count * 100) if msg_count > 0 else 0
+            print(f"  > Fragen-Quote:        {q_rate:.1f}% aller Nachrichten")
+            print("-" * 50)
 
-    emoji_stats = defaultdict(lambda: {
-        'total_emojis': 0,
-        'unique_emojis': Counter(),
-        'msg_with_emoji': 0,
-        'emoji_combos': Counter()
-    })
+    def analyze_emojis(self, start_filter=None, end_filter=None):
+        data = self._filter(start_filter, end_filter)
+        if not data:
+            print("Keine Daten für Emoji-Analyse gefunden.")
+            return
 
-    for m in data:
-        s_name = m['sender']
-        # Extract all emojis from the message
-        found = [e['emoji'] for e in emoji.emoji_list(m['msg'])]
+        emoji_stats = defaultdict(lambda: {
+            'total_emojis': 0,
+            'unique_emojis': Counter(),
+            'msg_with_emoji': 0,
+            'emoji_combos': Counter()
+        })
 
-        if found:
-            emoji_stats[s_name]['total_emojis'] += len(found)
-            emoji_stats[s_name]['unique_emojis'].update(found)
-            emoji_stats[s_name]['msg_with_emoji'] += 1
-            # Save the combination if it contains more than one emoji.
-            if len(found) > 1:
-                combo = "".join(found[:3])
-                emoji_stats[s_name]['emoji_combos'][combo] += 1
+        for m in data:
+            s_name = m['sender']
+            # Extract all emojis from the message
+            found = [e['emoji'] for e in emoji.emoji_list(m['msg'])]
 
-    print("=" * 60)
-    print(f"EMOJI-DIVERSITÄT & VIBE-CHECK")
-    print("=" * 60)
+            if found:
+                emoji_stats[s_name]['total_emojis'] += len(found)
+                emoji_stats[s_name]['unique_emojis'].update(found)
+                emoji_stats[s_name]['msg_with_emoji'] += 1
+                # Save the combination if it contains more than one emoji.
+                if len(found) > 1:
+                    combo = "".join(found[:3])
+                    emoji_stats[s_name]['emoji_combos'][combo] += 1
 
-    for name, s in emoji_stats.items():
-        actual_msg_count = sum(1 for m in data if m['sender'] == name)
+        print("=" * 60)
+        print(f"EMOJI-DIVERSITÄT & VIBE-CHECK")
+        print("=" * 60)
 
-        emoji_ratio = (s['total_emojis'] / actual_msg_count) if actual_msg_count > 0 else 0
-        diversity = len(s['unique_emojis'])
+        for name, s in emoji_stats.items():
+            actual_msg_count = sum(1 for m in data if m['sender'] == name)
 
-        print(f"Name: {name}")
-        print(f"  > Emojis insgesamt:   {s['total_emojis']}")
-        print(f"  > Emoji-Dichte:       {emoji_ratio:.2f} Emojis pro Nachricht")
-        print(f"  > Emojis-Diversität:  {diversity} verschiedene Symbole genutzt")
+            emoji_ratio = (s['total_emojis'] / actual_msg_count) if actual_msg_count > 0 else 0
+            diversity = len(s['unique_emojis'])
 
-        print(f"  > Top 10 Emojis:")
-        top_10 = s['unique_emojis'].most_common(10)
-        for emo, count in top_10:
-            perc = (count / s['total_emojis'] * 100) if s['total_emojis'] > 0 else 0
-            print(f"    - {emo} : {count:>5}x ({perc:>4.1f}%)")
+            print(f"Name: {name}")
+            print(f"  > Emojis insgesamt:   {s['total_emojis']}")
+            print(f"  > Emoji-Dichte:       {emoji_ratio:.2f} Emojis pro Nachricht")
+            print(f"  > Emojis-Diversität:  {diversity} verschiedene Symbole genutzt")
 
-        if s['emoji_combos']:
-            common_combos = ", ".join([f"{c}" for c, _ in s['emoji_combos'].most_common(3)])
-            print(f"  > Typische Kombis:    {common_combos}")
+            print(f"  > Top 10 Emojis:")
+            top_10 = s['unique_emojis'].most_common(10)
+            for emo, count in top_10:
+                perc = (count / s['total_emojis'] * 100) if s['total_emojis'] > 0 else 0
+                print(f"    - {emo} : {count:>5}x ({perc:>4.1f}%)")
 
-        print("-" * 40)
+            if s['emoji_combos']:
+                common_combos = ", ".join([f"{c}" for c, _ in s['emoji_combos'].most_common(3)])
+                print(f"  > Typische Kombis:    {common_combos}")
 
+            print("-" * 40)
 
-def check_occurrence(file_path, search_terms, start_filter=None, end_filter=None, output_occurrence=False):
-    all_data = get_formatted_data(file_path)
+    def check_occurrence(self, search_terms, start_filter=None, end_filter=None, output_occurrence=False):
+        data = self._filter(start_filter, end_filter)
+        if not data:
+            return
 
-    start = start_filter if start_filter else datetime.min
-    end = end_filter if end_filter else datetime.max
-    data = [m for m in all_data if start <= m['ts'] <= end]
+        results = defaultdict(lambda: {'total_count': 0, 'msg_with_term': 0})
 
-    results = defaultdict(lambda: {'total_count': 0, 'msg_with_term': 0})
-
-    for m in all_data:
-        if start <= m['ts'] <= end:
+        for m in data:
             s_name = m['sender']
             msg_lower = m['msg'].lower()
             found_in_msg = False
@@ -564,26 +551,27 @@ def check_occurrence(file_path, search_terms, start_filter=None, end_filter=None
                 results[s_name]['msg_with_term'] += 1
                 if output_occurrence: print(m['sender'] + ": " + m['msg'])
 
-    # --- Output ---
-    print("=" * 60)
-    print(f"ANALYSE FÜR: '{', '.join(search_terms)}'")
-    print(f"Zeitraum: {data[0]['ts'].date()} bis {data[-1]['ts'].date()}")
-    print("=" * 60)
+        # --- Output ---
+        print("=" * 60)
+        print(f"ANALYSE FÜR: '{', '.join(search_terms)}'")
+        print(f"Zeitraum: {data[0]['ts'].date()} bis {data[-1]['ts'].date()}")
+        print("=" * 60)
 
-    if not results:
-        print("Keine Treffer gefunden.")
-        return
+        if not results:
+            print("Keine Treffer gefunden.")
+            return
 
-    for name, data in results.items():
-        print(f"Name: {name}")
-        print(f"  > Insgesamt vorkommen:      {data['total_count']} mal")
-        print(f"  > Nachrichten mit Begriff:  {data['msg_with_term']}")
-        if data['msg_with_term'] > 0:
-            avg = data['total_count'] / data['msg_with_term']
-        else:
-            avg = 0.0
-        print(f"  > Ø Intensität pro Nachricht: {avg:.2f}")
-        print("-" * 30)
+        for name, data in results.items():
+            print(f"Name: {name}")
+            print(f"  > Insgesamt vorkommen:      {data['total_count']} mal")
+            print(f"  > Nachrichten mit Begriff:  {data['msg_with_term']}")
+            if data['msg_with_term'] > 0:
+                avg = data['total_count'] / data['msg_with_term']
+            else:
+                avg = 0.0
+            print(f"  > Ø Intensität pro Nachricht: {avg:.2f}")
+            print("-" * 30)
+
 
 # --- Calls ---
 # Example:
@@ -591,14 +579,49 @@ def check_occurrence(file_path, search_terms, start_filter=None, end_filter=None
 # check_occurrence('input/chat.txt', ["Hey", "Hi", "Hello"], start_filter=datetime(2024, 6, 7))
 
 if __name__ == '__main__':
-    file_path = 'input/chat.txt'
+    chat = ChatAnalyzer('input/chat.txt')
 
-    analyze_vocabulary(file_path)
-    #analyze_linguistic_style(file_path, start_filter=datetime(2026, 4, 10))
-    #advanced_vocabulary_model(file_path)
-    #analyze_chat(file_path)
-    #analyze_chat(file_path, start_filter=datetime(2026, 2, 10))
-    #analyze_emojis(file_path)
-    #check_occurrence(file_path, ["Nachti", "Gute Nacht", "Gut Nacht"], output_occurrence=True)
-    #check_occurrence(file_path, ["Jaa"])
+    #chat.analyze_chat()
+    #chat.analyze_vocabulary()
+    chat.analyze_linguistic_style(start_filter=datetime(2026, 4, 10))
 
+    #chat.analyze_emojis()
+    #chat.check_occurrence(["Nachti", "Gute Nacht", "Gut Nacht"], output_occurrence=True)
+    #chat.check_occurrence(["Jaa"])
+
+    # chat.analyze_chat(start_filter=datetime(2026, 2, 10), end_filter=datetime(2026, 3, 10))
+
+#TODO Add image voice message analyzer (how often)
+# veränderung der werte in monats schritten
+# Positivity anhanden wörter und emojis
+# heatmap
+# diagramm der nachrichten
+# wer benutzt mehr zahlen
+
+#FRAGEN
+#Wie gut ist mein Code? Gibt es logische Fehler?
+#Sollte ich die Ignoranz von Medien wieder wegmachen (würde die Wörter- und Nachrichtenanalyse beeinflussen, aber dafür die Gesamtanzahl an Nachrichten  und die Zeit bis zur Antwort genauer machen)?
+#Sind die Werte, die ich per Spacy, Matheformeln und Analysen ermittle, realitätsnah?
+#Was sollte ich noch hinzufügen?
+
+#Medien-Nachrichten ignorieren
+#Ja, du solltest sie ignorieren – aber differenzierter. Aktuell ignorierst du sie komplett. Besser: Beim Parsen ein Flag setzen:
+#pythoncurrent_msg = {
+#    ...
+#    'is_media': any(p in msg for p in omitted_patterns)
+#}
+#Dann kannst du je nach Analyse entscheiden:
+#
+#analyze_chat → Medien mitzählen (genauere Nachrichtenanzahl & Antwortzeiten)
+#analyze_vocabulary / analyze_linguistic_style → Medien ausschließen
+
+#Antwortzeiten: Der 1 < diff < 240-Filter ist gut gemeint, aber 4 Stunden als Grenze ist willkürlich. Besser wäre es, das pro Tageszeit zu gewichten oder nur Nachrichten innerhalb derselben „Session" zu zählen.
+#Ego-Ratio: Der Selbst-/Fremdbezug ist methodisch sinnvoll, aber mit 639 Einträgen in external_reference_words wie vorhin besprochen unsicher.
+
+#Was noch hinzufügen?
+#Du hast selbst gute TODOs. Konkret umsetzbar wären:
+#
+#Monatliche Verlaufskurve – für msg_count, avg_response_time, question_rate. Zeigt Beziehungsdynamik über Zeit sehr deutlich.
+#Initiativ-Analyse – wer startet Gespräche (erste Nachricht nach >2h Pause)?
+#Stimmungs-Trend – kombiniere support_hits, self_hits, Emoji-Dichte zu einem einfachen Positivity-Score.
+#Medien-Zählung – wie viele Bilder/Voice Messages hat wer geschickt? Ist ein einfacher Counter beim Parsen.
