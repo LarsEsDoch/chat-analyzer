@@ -547,48 +547,81 @@ class ChatAnalyzer:
 
             print("-" * 40)
 
-    def check_occurrence(self, search_terms, start_filter=None, end_filter=None, output_occurrence=False):
+    def check_occurrence(self, required_groups, excluded_terms=None, start_filter=None, end_filter=None,
+                         output_occurrence=False):
         data = self._filter(start_filter, end_filter)
         if not data:
+            print("Keine Daten im gewählten Zeitraum gefunden.")
             return
 
-        results = defaultdict(lambda: {'total_count': 0, 'msg_with_term': 0})
+        excluded_terms = [t.lower() for t in (excluded_terms or [])]
+        results = defaultdict(lambda: {
+            'total_count': 0,
+            'msg_with_term': 0,
+            'total_msg_sender': 0,
+            'hits_by_term': defaultdict(int)
+        })
 
         for m in data:
-            s_name = m['sender']
+            results[m['sender']]['total_msg_sender'] += 1
+
+        for m in data:
             msg_lower = m['msg'].lower()
-            found_in_msg = False
+            s_name = m['sender']
 
-            for term in search_terms:
-                t_lower = term.lower()
-                if t_lower in msg_lower:
-                    results[s_name]['total_count'] += msg_lower.count(t_lower)
-                    found_in_msg = True
+            if any(bad_word in msg_lower for bad_word in excluded_terms):
+                continue
 
-            if found_in_msg:
+            group_matches = []
+            temp_term_counts = defaultdict(int)
+
+            for group in required_groups:
+                current_group_hits = 0
+                for term in group:
+                    t_lower = term.lower()
+                    count = msg_lower.count(t_lower)
+                    if count > 0:
+                        current_group_hits += count
+                        temp_term_counts[term] += count
+                group_matches.append(current_group_hits)
+
+            if all(hits > 0 for hits in group_matches):
+                results[s_name]['total_count'] += sum(group_matches)
                 results[s_name]['msg_with_term'] += 1
-                if output_occurrence: print(m['sender'] + ": " + m['msg'])
 
-        # --- Output ---
+                for term, count in temp_term_counts.items():
+                    results[s_name]['hits_by_term'][term] += count
+
+                if output_occurrence:
+                    print(f"[TREFFER] {s_name}: {m['msg']}")
+
         print("=" * 60)
-        print(f"ANALYSE FÜR: '{', '.join(search_terms)}'")
-        print(f"Zeitraum: {data[0]['ts'].date()} bis {data[-1]['ts'].date()}")
+        print("ERWEITERTE TEXT-ANALYSE")
+        print("=" * 60)
+        logic_str = " UND ".join([f"({'|'.join(g)})" for g in required_groups])
+        print(f"LOGIK: {logic_str[:60]:<60} ")
+        if excluded_terms:
+            print(f"AUSSCHLUSS (NOT): {', '.join(excluded_terms)[:51]:<51}")
+        print(f"ZEITRAUM: {data[0]['ts'].date()} bis {data[-1]['ts'].date()}")
         print("=" * 60)
 
-        if not results:
-            print("Keine Treffer gefunden.")
-            return
+        sorted_senders = sorted(results.items(), key=lambda x: x[1]['msg_with_term'], reverse=True)
 
-        for name, data in results.items():
-            print(f"Name: {name}")
-            print(f"  > Insgesamt vorkommen:      {data['total_count']} mal")
-            print(f"  > Nachrichten mit Begriff:  {data['msg_with_term']}")
-            if data['msg_with_term'] > 0:
-                avg = data['total_count'] / data['msg_with_term']
-            else:
-                avg = 0.0
-            print(f"  > Ø Intensität pro Nachricht: {avg:.2f}")
-            print("-" * 30)
+        for name, stats in sorted_senders:
+            if stats['msg_with_term'] == 0: continue
+
+            quota = (stats['msg_with_term'] / stats['total_msg_sender']) * 100
+            avg_intensity = stats['total_count'] / stats['msg_with_term']
+
+            print(f"👤 ANALYSE FÜR SENDER: {name.upper()}")
+            print(
+                f"  ├─ Nachrichtenfokus: {stats['msg_with_term']} von {stats['total_msg_sender']} gesamt ({quota:.2f}%)")
+            print(f"  ├─ Trefferdichte:    {stats['total_count']} Wörter gesamt")
+            print(f"  ├─ Ø Intensität:     {avg_intensity:.2f} Begriffe pro Treffer-Nachricht")
+
+            top_words = sorted(stats['hits_by_term'].items(), key=lambda x: x[1], reverse=True)[:3]
+            word_str = ", ".join([f"{w} ({c}x)" for w, c in top_words])
+            print(f"  └─ Top-Begriffe:     {word_str}")
 
 
 # --- Calls ---
@@ -608,12 +641,12 @@ class ChatAnalyzer:
 if __name__ == '__main__':
     chat = ChatAnalyzer('input/chat.txt')
 
-    chat.analyze_chat()
+    #chat.analyze_chat()
     #chat.analyze_vocabulary()
     #chat.analyze_linguistic_style()
     #chat.analyze_emojis()
 
-    chat.check_occurrence(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "%"], output_occurrence=False, start_filter=datetime(2022, 4,28), end_filter=datetime(2026, 5, 6))
+    chat.check_occurrence([[""], ["nacht"]], ["abc"], output_occurrence=True, start_filter=datetime(2022, 4,28), end_filter=datetime(2026, 5, 6))
 
     #chat.analyze_chat(start_filter=datetime(2026, 5,6), end_filter=datetime(2026, 5, 7))
 
