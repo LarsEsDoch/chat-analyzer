@@ -144,7 +144,8 @@ class ChatAnalyzer:
         # --- Statistics ---
         stats = defaultdict(lambda: {
             'msg_count': 0, 'total_words': 0, 'responses': [], 'time_slots': Counter(),
-            'emojis': Counter(), 'bursts': [], 'weekdays': Counter(), 'common_words': Counter(), 'text_msg_count': 0
+            'emojis': Counter(), 'bursts': [], 'weekdays': Counter(), 'common_words': Counter(),
+            'text_msg_count': 0, 'number_count': 0
         })
 
         current_burst = 0
@@ -162,6 +163,7 @@ class ChatAnalyzer:
             if not is_media:
                 stats[s_name]['text_msg_count'] += 1
                 stats[s_name]['total_words'] += len(msg_text.split())
+                stats[s_name]['number_count'] += len(re.findall(r'\d+', msg_text))
 
                 words = re.findall(r'\b\w+\b', msg_text.lower())
                 filtered_words = [w for w in words if w not in STOP_WORDS and len(w) > 2]
@@ -191,9 +193,9 @@ class ChatAnalyzer:
                 diff = (curr['ts'] - wait_start_ts).total_seconds() / 60
                 if 1 < diff < 240:
                     stats[s_name]['responses'].append(diff)
-                    # print(s_name + ", " + str(diff) + ": " + msg_text)
+                    #print("Used: " + s_name + ", " + str(diff) + ": " + msg_text)
                 else:
-                    # print(s_name + ", " + str(diff) + ": " + msg_text + " (" + str(curr['ts']) + ")")
+                    #print("Not used: " + s_name + ", " + str(diff) + ": " + msg_text + " (" + str(curr['ts']) + ")")
                     pass
                 wait_start_ts = curr['ts']
                 current_burst = 1
@@ -225,6 +227,7 @@ class ChatAnalyzer:
             print(f"  > Ø Nachrichten am Stück: {avg_burst:.1f}")
             print(f"  > Ø Antwortzeit: {avg_resp:.1f} Min.")
             print(f"  > Ø Wortanzahl: {avg_msg_length:.1f} Wörter pro Nachricht")
+            print(f"  > Benutze Zahlen: {s['number_count']}")
             print(f"  > Top Wörter:  {top_words if top_words else 'Keine'}")
             print(f"  > Top Emojis: {top_emojis if top_emojis else 'Keine'}")
             print(f"  > Zeitliche Verteilung:")
@@ -606,18 +609,16 @@ if __name__ == '__main__':
     chat = ChatAnalyzer('input/chat.txt')
 
     chat.analyze_chat()
-    chat.analyze_vocabulary()
-    chat.analyze_linguistic_style()
-    chat.analyze_emojis()
+    #chat.analyze_vocabulary()
+    #chat.analyze_linguistic_style()
+    #chat.analyze_emojis()
 
-    chat.check_occurrence(["Nachti", "Gute Nacht", "Gut Nacht"], output_occurrence=True)
+    chat.check_occurrence(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "%"], output_occurrence=False, start_filter=datetime(2022, 4,28), end_filter=datetime(2026, 5, 6))
 
-    chat.analyze_chat(start_filter=datetime(2026, 1, 1), end_filter=datetime(2026, 5, 2))
+    #chat.analyze_chat(start_filter=datetime(2026, 5,6), end_filter=datetime(2026, 5, 7))
 
 #TODO Add image voice message analyzer (how often)
 # veränderung der werte in monats schritten
-# Positivity anhanden wörter und emojis
-# heatmap
 # diagramm der nachrichten
 # wer benutzt mehr zahlen
 
