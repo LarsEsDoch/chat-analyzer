@@ -653,34 +653,31 @@ class ChatAnalyzer:
 
 # --- Calls ---
 # Example:
-# chat = ChatAnalyzer('input/chat.txt')
+# chat = ChatAnalyzer( #File directory of chat export# 'input/chat.txt')
 
-# chat.analyze_chat()
-# chat.analyze_vocabulary()
-# chat.analyze_linguistic_style()
-# chat.analyze_emojis()
+# chat.analyze_chat(#Possible start and end date#)
+# chat.analyze_vocabulary(#Possible start and end date#)
+# chat.analyze_linguistic_style(#Possible start and end date#)
+# chat.analyze_emojis(#Possible start and end date#)
 
-# check_occurrence(["Hey", "Hi", "Hello"])
+# chat.check_occurrence( #Simple search Terms in double square brackets# [["Hey", "Hi", "Hello"]])
 
-# chat.check_occurrence(["Good Night", "gn"], output_occurrence=True, start_filter=datetime(2024, 12, 21), end_filter=datetime(2025, 11, 5))
-# analyze_chat('input/chat.txt', start_filter=datetime(2023, 4, 23), end_filter=datetime(2025, 1, 1))
+# ANDs and ORs in brackets are only to show the logik
+# search_terms = [["", (OR) "", ...], (AND) ["", (OR) "", (OR) "", ...], (AND) [""], ...]
+# excluded_terms = ["", (OR) "", (OR) "", ...]
+
+# chat.check_occurrence(#Search filter# search_terms, #Exclude filter# excluded_terms, #Output messages where terms occur# output_occurrence=True,
+#                       #Start date of analysis# start_filter=datetime(2024, 12, 21), #End date of analysis# end_filter=datetime(2025, 11, 5))
+
+# chat.analyze_chat(#Start date of analysis# start_filter=datetime(2023, 4, 23), #End date of analysis# end_filter=datetime(2025, 1, 1))
 
 if __name__ == '__main__':
     chat = ChatAnalyzer('input/chat.txt')
 
-    #chat.analyze_chat()
+    chat.analyze_chat()
     #chat.analyze_vocabulary()
     #chat.analyze_linguistic_style()
     #chat.analyze_emojis()
 
-    chat.check_occurrence([[""], ["nacht"]], ["abc"], output_occurrence=True, start_filter=datetime(2022, 4,28), end_filter=datetime(2026, 5, 6))
-
+    #chat.check_occurrence([[""]], ["abc"], output_occurrence=True, start_filter=datetime(2022, 4,28), end_filter=datetime(2026, 5, 6))
     #chat.analyze_chat(start_filter=datetime(2026, 5,6), end_filter=datetime(2026, 5, 7))
-
-#TODO
-# veränderung der werte in monats schritten
-# diagramm der nachrichten
-# Monatliche Verlaufskurve – für msg_count, avg_response_time, question_rate. Zeigt Beziehungsdynamik über Zeit sehr deutlich.
-# Stimmungs-Trend – kombiniere support_hits, self_hits, Emoji-Dichte zu einem einfachen Positivity-Score. Wer ist positiver?
-# Antwortzeiten: Der 1 < diff < 240-Filter ist gut gemeint, aber 4 Stunden als Grenze ist willkürlich. Besser wäre es, das pro Tageszeit zu gewichten oder nur Nachrichten innerhalb derselben „Session" zu zählen.
-# Ego-Ratio: Der Selbst-/Fremdbezug ist methodisch sinnvoll, aber mit 639 Einträgen in external_reference_words wie vorhin besprochen unsicher.
